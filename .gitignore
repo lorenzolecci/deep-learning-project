@@ -2,3 +2,5 @@
 *.h5
 *.keras
 *.hdf5
+__pycache__/
+*.pyc
