@@ -224,3 +224,65 @@ def visualize_original_and_maps(model, input_image, label_index, class_names):
 
         plt.tight_layout()
         plt.show()
+
+# --------------------------------------------------------------------------------------------------------------
+
+def build_light_model(use_he=False, use_l2=False, optimizer='adam'):
+    """
+    Lightweight version of build_optimized_model with half the filters/units per layer.
+    Data Augmentation is handled EXTERNALLY via ImageDataGenerator.
+    """
+    INPUT_SHAPE = (56, 56, 1)
+    NUM_CLASSES = 9
+
+    model = Sequential(name="Light_CNN")
+
+    # --- He Initialization ---
+    if use_he:
+        print("-> Applying He Initialization")
+        initializer = 'he_normal'
+    else:
+        initializer = 'glorot_uniform'
+
+    # --- L2 Regularization ---
+    if use_l2:
+        print("-> Applying L2 Regularization")
+        regularizer = l2(0.001)
+    else:
+        regularizer = None
+
+    # --- Block 1: Feature Extraction ---
+    model.add(Conv2D(16, kernel_size=(3, 3), activation='relu', padding='same',   # era 32
+                     kernel_initializer=initializer, kernel_regularizer=regularizer,
+                     input_shape=INPUT_SHAPE, name="conv_layer_1"))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+
+    model.add(Conv2D(32, kernel_size=(3, 3), activation='relu', padding='same',   # era 64
+                     kernel_initializer=initializer, kernel_regularizer=regularizer, name="conv_layer_2"))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+
+    model.add(Conv2D(64, kernel_size=(3, 3), activation='relu', padding='same',   # era 128
+                     kernel_initializer=initializer, kernel_regularizer=regularizer, name="conv_layer_3"))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+
+    # --- Block 2: Classification ---
+    model.add(Flatten())
+
+    model.add(Dense(64, activation='relu',                                         # era 128
+                    kernel_initializer=initializer, kernel_regularizer=regularizer))
+    model.add(Dropout(0.5))
+
+    model.add(Dense(NUM_CLASSES, activation='softmax'))
+
+    # --- Optimizer ---
+    if isinstance(optimizer, str):
+        opt = SGD(learning_rate=0.01, momentum=0.9) if optimizer == 'sgd_momentum' \
+          else Adam(learning_rate=0.001)
+    else:
+        opt = optimizer
+
+    model.compile(optimizer=opt, loss='categorical_crossentropy', metrics=['accuracy'])
+    return model
