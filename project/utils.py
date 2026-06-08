@@ -16,7 +16,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, GlobalAveragePooling2D, Flatten, Dense, Dropout, BatchNormalization
 from tensorflow.keras.regularizers import l2
 from tensorflow.keras.optimizers import Adam, SGD, RMSprop, Nadam
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
@@ -286,3 +286,157 @@ def build_light_model(use_he=False, use_l2=False, optimizer='adam'):
 
     model.compile(optimizer=opt, loss='categorical_crossentropy', metrics=['accuracy'])
     return model
+
+# --------------------------------------------------------------------------------------------------------------
+
+def build_ultra_light_model(use_he=False, use_l2=False, optimizer='adam'):
+    """
+    Versione Ultra-Light: Filtri ridotti (8-16-32) e Global Average Pooling.
+    Risparmio di oltre il 90% dei parametri rispetto al modello con Flatten().
+    """
+    INPUT_SHAPE = (56, 56, 1)
+    NUM_CLASSES = 9
+
+    model = Sequential(name="Ultra_Light_CNN")
+
+    # --- Inizializzazione ---
+    if use_he:
+        print("-> Applying He Initialization")
+        initializer = 'he_normal'
+    else:
+        initializer = 'glorot_uniform'
+
+    # --- Regolarizzazione ---
+    if use_l2:
+        print("-> Applying L2 Regularization")
+        regularizer = l2(0.001)
+    else:
+        regularizer = None
+
+    # --- Block 1: Feature Extraction ---
+    # Ridotto da 16 a 8 filtri
+    model.add(Conv2D(8, kernel_size=(3, 3), activation='relu', padding='same',
+                     kernel_initializer=initializer, kernel_regularizer=regularizer,
+                     input_shape=INPUT_SHAPE, name="conv_layer_1"))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+
+    # Ridotto da 32 a 16 filtri
+    model.add(Conv2D(16, kernel_size=(3, 3), activation='relu', padding='same',
+                     kernel_initializer=initializer, kernel_regularizer=regularizer, name="conv_layer_2"))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+
+    # Ridotto da 64 a 32 filtri
+    model.add(Conv2D(32, kernel_size=(3, 3), activation='relu', padding='same',
+                     kernel_initializer=initializer, kernel_regularizer=regularizer, name="conv_layer_3"))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+
+    # --- Block 2: Classification (LA VERA RIVOLUZIONE) ---
+    # Invece di appiattire (Flatten) e creare centinaia di migliaia di connessioni,
+    # facciamo semplicemente la media spaziale di ogni singola feature map.
+    model.add(GlobalAveragePooling2D(name="gap_layer"))
+    
+    # Opzionale: un po' di dropout per sicurezza, anche se il GAP è già un forte regolarizzatore
+    model.add(Dropout(0.3)) 
+
+    # Connettiamo direttamente i 32 valori medi alle 9 classi di output
+    model.add(Dense(NUM_CLASSES, activation='softmax', name="output_layer"))
+
+    # --- Optimizer ---
+    if isinstance(optimizer, str):
+        opt = SGD(learning_rate=0.01, momentum=0.9) if optimizer == 'sgd_momentum' \
+          else Adam(learning_rate=0.001)
+    else:
+        opt = optimizer
+
+    model.compile(optimizer=opt, loss='categorical_crossentropy', metrics=['accuracy'])
+    
+    return model
+
+# --------------------------------------------------------------------------------------------------------------
+
+def statistical_analysis(df):
+    print("--- General Information ---")
+    print(f"Dataset shape: {df.shape}")
+    print(f"Null values per column:\n{df.isnull().sum()}\n")
+    
+    print("--- Class Distribution (failureType) ---")
+    distribution = df['failureType'].value_counts()
+    print(distribution)
+
+    # Bar chart for defect distribution with percentages
+    plt.figure(figsize=(10, 5))
+    ax = sns.barplot(
+        y=distribution.index, 
+        x=distribution.values, 
+        color='steelblue'
+    )
+    
+    # Calculate and add percentage labels
+    total = distribution.sum()
+    percentages = [f" {(value / total) * 100:.1f}%" for value in distribution.values]
+    ax.bar_label(ax.containers[0], labels=percentages, label_type='edge', padding=3)
+
+    plt.title("Failure Type Distribution")
+    plt.xlabel("Count")
+    plt.ylabel("Defect Type")
+    
+    # Expand x-axis limit slightly to make room for the percentage text
+    plt.xlim(0, max(distribution.values) * 1.15) 
+    
+    plt.tight_layout()
+    plt.show()
+
+    # Histogram for die size distribution (if available)
+    if 'dieSize' in df.columns:
+        plt.figure(figsize=(10, 5))
+        sns.histplot(df['dieSize'], bins=50, kde=True, color='teal')
+        plt.title("Die Size Distribution")
+        plt.xlabel("Size")
+        plt.ylabel("Frequency")
+        plt.tight_layout()
+        plt.show()
+        
+# --------------------------------------------------------------------------------------------------------------
+
+def visualize_wafer_samples(df):
+    classes = df['failureType'].unique()
+    n_classes = len(classes)
+    
+    cols = 3
+    rows = int(np.ceil(n_classes / cols))
+    
+    fig, axes = plt.subplots(rows, cols, figsize=(12, 3 * rows))
+    axes = axes.ravel()
+    
+    for i, cls in enumerate(classes):
+        # Extract the first available wafer map for the current class
+        sample = df[df['failureType'] == cls].iloc[0]
+        
+        axes[i].imshow(sample['waferMap'], cmap='inferno')
+        axes[i].set_title(f"{cls}")
+        axes[i].axis('off')
+        
+    # Hide excess empty axes
+    for j in range(i + 1, len(axes)):
+        axes[j].axis('off')
+        
+    plt.tight_layout()
+    plt.show()
+
+# --------------------------------------------------------------------------------------------------------------
+
+def is_valid_label(label):
+    # Handle nested lists or numpy arrays
+    while isinstance(label, (np.ndarray, list)):
+        if len(label) == 0:
+            return False  # Discard empty arrays []
+        label = label[0]
+    
+    # Convert to lowercase string to be safe
+    label_str = str(label).strip().lower()
+    
+    # Return True only if it's explicitly training or test
+    return label_str in ['training', 'test']
