@@ -1,0 +1,10 @@
+,Training pool,Training after cap,Validation,Large test
+center,2791,2791,644,859
+donut,361,361,83,111
+edge-loc,3372,3000,779,1038
+edge-ring,6292,3000,1452,1936
+loc,2336,2336,539,718
+near-full,97,97,22,30
+none,95830,3000,22115,29486
+random,563,563,130,173
+scratch,775,775,179,239

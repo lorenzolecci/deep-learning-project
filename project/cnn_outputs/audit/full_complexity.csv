@@ -1,0 +1,9 @@
+Model,Conv filters,Dense units,Total parameters,Trainable parameters,Non-trainable parameters
+Baseline,"[32, 64, 128]","[128, 9]",897673,897225,448
+He initialization,"[32, 64, 128]","[128, 9]",897673,897225,448
+He + arbitrary rotations,"[32, 64, 128]","[128, 9]",897673,897225,448
+He + safe flips,"[32, 64, 128]","[128, 9]",897673,897225,448
+He + safe flips + L2,"[32, 64, 128]","[128, 9]",897673,897225,448
+Optimizer study — SGD + Nesterov,"[32, 64, 128]","[128, 9]",897673,897225,448
+Optimizer study — RMSprop,"[32, 64, 128]","[128, 9]",897673,897225,448
+Optimizer study — Nadam,"[32, 64, 128]","[128, 9]",897673,897225,448

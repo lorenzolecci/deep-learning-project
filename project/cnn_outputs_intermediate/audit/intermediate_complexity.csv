@@ -1,0 +1,9 @@
+Model,Conv filters,Dense units,Total parameters,Trainable parameters,Non-trainable parameters
+Intermediate — Baseline,"[24, 48, 96]","[96, 9]",505449,505113,336
+Intermediate — He initialization,"[24, 48, 96]","[96, 9]",505449,505113,336
+Intermediate — He + arbitrary rotations,"[24, 48, 96]","[96, 9]",505449,505113,336
+Intermediate — He + safe flips,"[24, 48, 96]","[96, 9]",505449,505113,336
+Intermediate — He + safe flips + L2,"[24, 48, 96]","[96, 9]",505449,505113,336
+Intermediate optimizer — SGD + Nesterov,"[24, 48, 96]","[96, 9]",505449,505113,336
+Intermediate optimizer — RMSprop,"[24, 48, 96]","[96, 9]",505449,505113,336
+Intermediate optimizer — Nadam,"[24, 48, 96]","[96, 9]",505449,505113,336

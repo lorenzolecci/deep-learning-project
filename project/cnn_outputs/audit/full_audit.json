@@ -1,0 +1,53 @@
+{
+  "model_family": "FULL",
+  "dataset": {
+    "path": "datasets/Dataset.pkl",
+    "exists": true,
+    "sha256": "b031f2acf035e29639f3eb1b8af4fe962d2ebcb200bc75603a204d57de846ff2",
+    "number_of_rows": 172950
+  },
+  "splits": {
+    "train": {
+      "size": 15923,
+      "sha256": "f3849232642875f4584e95f9224e5b2082ab9aad35e38fc277bb2cb127be4aab"
+    },
+    "validation": {
+      "size": 25943,
+      "sha256": "eeb98ae6212bdf27355b372001b69d80c0327d012ad130e5588b8e1911f217aa"
+    },
+    "test": {
+      "size": 34590,
+      "sha256": "82e1c4f7671f7166ae8bac6a7e8f882fc80f9bdc884036c6d5885b98abbbbafb"
+    }
+  },
+  "selected_model": {
+    "name": "Optimizer study \u2014 Nadam",
+    "convolution_filters": [
+      32,
+      64,
+      128
+    ],
+    "dense_units": [
+      128,
+      9
+    ],
+    "total_parameters": 897673,
+    "trainable_parameters": 897225,
+    "non_trainable_parameters": 448,
+    "validation_metrics": {
+      "Accuracy": 0.960143391280885,
+      "Balanced Accuracy": 0.9047934734427057,
+      "Macro Precision": 0.8177112460897925,
+      "Macro Recall": 0.9047934734427057,
+      "Macro F1": 0.8563516457326537
+    },
+    "test_metrics": {
+      "Accuracy": 0.9568372361954322,
+      "Balanced Accuracy": 0.8732195289167749,
+      "Macro Precision": 0.7991112723485175,
+      "Macro Recall": 0.8732195289167749,
+      "Macro F1": 0.8313903602309531
+    }
+  },
+  "checkpoint_paths_are_unique": true
+}

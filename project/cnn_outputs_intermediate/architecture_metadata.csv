@@ -1,0 +1,2 @@
+Architecture,Convolutional filters,Dense units,Parameters,Reference full parameters,Parameter reduction (%),Batch size,Seed
+Intermediate CNN,"24, 48, 96",96,505449,897673,43.69341619944011,128,42

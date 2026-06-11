@@ -1,0 +1,10 @@
+Check,Passed
+Correct FULL family label,True
+Correct INTERMEDIATE family label,True
+Same dataset content,True
+Same dataset row count,True
+Same training indices,True
+Same validation indices,True
+Same test indices,True
+FULL checkpoint paths unique,True
+INTERMEDIATE checkpoint paths unique,True

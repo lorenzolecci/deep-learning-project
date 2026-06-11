@@ -1,0 +1,53 @@
+{
+  "model_family": "INTERMEDIATE",
+  "dataset": {
+    "path": "datasets/Dataset.pkl",
+    "exists": true,
+    "sha256": "b031f2acf035e29639f3eb1b8af4fe962d2ebcb200bc75603a204d57de846ff2",
+    "number_of_rows": 172950
+  },
+  "splits": {
+    "train": {
+      "size": 15923,
+      "sha256": "f3849232642875f4584e95f9224e5b2082ab9aad35e38fc277bb2cb127be4aab"
+    },
+    "validation": {
+      "size": 25943,
+      "sha256": "eeb98ae6212bdf27355b372001b69d80c0327d012ad130e5588b8e1911f217aa"
+    },
+    "test": {
+      "size": 34590,
+      "sha256": "82e1c4f7671f7166ae8bac6a7e8f882fc80f9bdc884036c6d5885b98abbbbafb"
+    }
+  },
+  "selected_model": {
+    "name": "Intermediate optimizer \u2014 SGD + Nesterov",
+    "convolution_filters": [
+      24,
+      48,
+      96
+    ],
+    "dense_units": [
+      96,
+      9
+    ],
+    "total_parameters": 505449,
+    "trainable_parameters": 505113,
+    "non_trainable_parameters": 336,
+    "validation_metrics": {
+      "Accuracy": 0.9596808387619011,
+      "Balanced Accuracy": 0.9057858196284864,
+      "Macro Precision": 0.8176043190269771,
+      "Macro Recall": 0.9057858196284864,
+      "Macro F1": 0.8564238397052574
+    },
+    "test_metrics": {
+      "Accuracy": 0.9579936397802833,
+      "Balanced Accuracy": 0.8532966964412794,
+      "Macro Precision": 0.8102894965850371,
+      "Macro Recall": 0.8532966964412794,
+      "Macro F1": 0.8228881933737298
+    }
+  },
+  "checkpoint_paths_are_unique": true
+}

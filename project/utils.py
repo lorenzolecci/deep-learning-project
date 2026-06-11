@@ -1,432 +1,43 @@
-import os
+"""Utilities for the wafer-map CNN experiments."""
+
+from __future__ import annotations
+
 import math
+import os
 import random
+from pathlib import Path
+from typing import Any
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
 import tensorflow as tf
-from tqdm import tqdm
-from skimage.transform import resize
-from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import (
-    accuracy_score, balanced_accuracy_score,
+    accuracy_score,
+    balanced_accuracy_score,
+    classification_report,
+    confusion_matrix,
     precision_recall_fscore_support,
-    classification_report, confusion_matrix
+    f1_score
 )
-from sklearn.model_selection import train_test_split
-from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, GlobalAveragePooling2D, Flatten, Dense, Dropout, BatchNormalization
-from tensorflow.keras.regularizers import l2
-from tensorflow.keras.optimizers import Adam, SGD, RMSprop, Nadam
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from tensorflow.keras.models import Sequential
+from skimage.transform import resize
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+from tensorflow.keras.layers import (
+    BatchNormalization,
+    Conv2D,
+    Dense,
+    Dropout,
+    Flatten,
+    Input,
+    MaxPooling2D,
+    Rescaling,
+)
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.optimizers import Adam, Nadam, RMSprop, SGD
+from tensorflow.keras.regularizers import l2
+from tqdm.auto import tqdm
 
-# --------------------------------------------------------------------------------------------------------------
-
-def clean_nested_columns(df):
-    # Rename the column with the original typo
-    if 'trianTestLabel' in df.columns:
-        df.rename(columns={'trianTestLabel': 'trainTestLabel'}, inplace=True)
-    
-    # Inner function to extract and format text
-    def extract_text(value):
-        while isinstance(value, (np.ndarray, list)):
-            if len(value) == 0:
-                return "unknown"
-            value = value[0]
-        
-        # Return the clean string in lowercase (e.g., 'none', 'training', 'center')
-        return str(value).lower()
-    
-    # Apply cleaning to label columns
-    columns_to_fix = ['trainTestLabel', 'failureType']
-    
-    for col in columns_to_fix:
-        if col in df.columns:
-            df[col] = df[col].apply(extract_text)
-            
-    return df
-
-# --------------------------------------------------------------------------------------------------------------
-
-def resize_wafer_maps(df, target_shape=(56, 56)):
-    print(f"Ridimensionamento delle mappe dei wafer a {target_shape}...")
-    
-    resized_maps = []
-    
-    # Usiamo tqdm per vedere la barra di avanzamento
-    for i in tqdm(range(len(df))):
-        img = df['waferMap'].iloc[i]
-        
-        # Ridimensioniamo la matrice. 
-        # order=0 indica un'interpolazione "nearest-neighbor", fondamentale per dati discreti 
-        # (0, 1, 2) perché evita di creare sfumature con numeri decimali.
-        img_resized = resize(img, target_shape, order=0, preserve_range=True, anti_aliasing=False)
-        
-        resized_maps.append(img_resized.astype(np.uint8))
-        
-    # Creiamo un unico grande array NumPy di forma (N_immagini, Altezza, Larghezza)
-    X = np.array(resized_maps)
-    
-    # Aggiungiamo la dimensione del canale (1 per scala di grigi) richiesta dalle CNN
-    X = np.expand_dims(X, axis=-1)
-    
-    return X
-
-# --------------------------------------------------------------------------------------------------------------
-
-def build_optimized_model(use_he=False, use_l2=False, optimizer='adam'):
-    """
-    Builds a flexible CNN model where specific optimizations can be toggled on or off.
-    (Note: Data Augmentation is handled EXTERNALLY via ImageDataGenerator for DirectML compatibility).
-    """
-    INPUT_SHAPE = (56, 56, 1)
-    NUM_CLASSES = 9
-    
-    model = Sequential(name="Flexible_Optimized_CNN")
-        
-    # --- TO-DO 2: He Initialization ---
-    if use_he:
-        print("-> Applying He Initialization")
-        initializer = 'he_normal'
-    else:
-        initializer = 'glorot_uniform' # Default Keras initializer (Xavier)
-        
-    # --- TO-DO 4: L2 Regularization (Weight Decay) ---
-    if use_l2:
-        print("-> Applying L2 Regularization")
-        regularizer = l2(0.001)
-    else:
-        regularizer = None
-
-    # --- Block 1: Feature Extraction ---
-    # Since augmentation is now handled externally, we ALWAYS need to define input_shape here
-    model.add(Conv2D(32, kernel_size=(3, 3), activation='relu', padding='same',
-                     kernel_initializer=initializer, kernel_regularizer=regularizer, 
-                     input_shape=INPUT_SHAPE, name="conv_layer_1"))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-
-    model.add(Conv2D(64, kernel_size=(3, 3), activation='relu', padding='same',
-                     kernel_initializer=initializer, kernel_regularizer=regularizer, name="conv_layer_2"))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-
-    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu', padding='same',
-                     kernel_initializer=initializer, kernel_regularizer=regularizer, name="conv_layer_3"))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-
-    # --- Block 2: Classification ---
-    model.add(Flatten())
-
-    model.add(Dense(128, activation='relu', 
-                    kernel_initializer=initializer, kernel_regularizer=regularizer))
-    model.add(Dropout(0.5))
-
-    model.add(Dense(NUM_CLASSES, activation='softmax'))
-
-    # --- TO-DO 1: Compare Optimizers ---
-    if isinstance(optimizer, str):
-        opt = SGD(learning_rate=0.01, momentum=0.9) if optimizer == 'sgd_momentum' \
-          else Adam(learning_rate=0.001)
-    else:
-        opt = optimizer  # oggetto passato direttamente dal training loop
-
-    # Compile the Model
-    model.compile(optimizer=opt, loss='categorical_crossentropy', metrics=['accuracy'])
-    return model
-
-# --------------------------------------------------------------------------------------------------------------
-
-def plot_training_history(history_obj, experiment_name=""):
-    print(f"Plotting learning curves for {experiment_name}...")
-    plt.figure(figsize=(12, 5))
-
-    # Plot Accuracy
-    plt.subplot(1, 2, 1)
-    plt.plot(history_obj.history['accuracy'], label='Train Accuracy', color='teal', linewidth=2)
-    plt.plot(history_obj.history['val_accuracy'], label='Validation Accuracy', color='orange', linewidth=2)
-    plt.title(f'Model Accuracy - {experiment_name}')
-    plt.xlabel('Epochs')
-    plt.ylabel('Accuracy')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.6)
-
-    # Plot Loss (Error)
-    plt.subplot(1, 2, 2)
-    plt.plot(history_obj.history['loss'], label='Train Loss', color='teal', linewidth=2)
-    plt.plot(history_obj.history['val_loss'], label='Validation Loss', color='orange', linewidth=2)
-    plt.title(f'Model Loss - {experiment_name}')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.6)
-
-    plt.tight_layout()
-    plt.show()
-
-# --------------------------------------------------------------------------------------------------------------
-
-def add_labels(rects):
-    for rect in rects:
-        height = rect.get_height()
-        plt.text(rect.get_x() + rect.get_width()/2., height + 0.5,
-                f'{height:.1f}%', ha='center', va='bottom', fontsize=9, fontweight='bold')
-        
-# --------------------------------------------------------------------------------------------------------------
-
-def add_bar_labels(ax, bars):
-    for bar in bars:
-        ax.text(bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.4,
-                f'{bar.get_height():.1f}%',
-                ha='center', va='bottom',
-                fontsize=9, fontweight='bold')
-
-# --------------------------------------------------------------------------------------------------------------
-
-def visualize_original_and_maps(model, input_image, label_index, class_names):
-    # 1. Configurazione del modello per estrarre gli output di ogni layer Conv2D
-    layer_outputs = [layer.output for layer in model.layers if isinstance(layer, tf.keras.layers.Conv2D)]
-    activation_model = tf.keras.models.Model(inputs=model.input, outputs=layer_outputs)
-    activations = activation_model.predict(input_image[np.newaxis, ...], verbose=0)
-    layer_names = [layer.name for layer in model.layers if isinstance(layer, tf.keras.layers.Conv2D)]
-    
-    # 2. Visualizza immagine originale con il nome della classe
-    plt.figure(figsize=(2, 2))
-    plt.imshow(input_image.reshape(56, 56), cmap='gray')
-    
-    # Recuperiamo il nome dalla lista usando l'indice
-    label_name = class_names[label_index] 
-    plt.title(f"Original\nClass: {label_name}")
-    plt.axis('off')
-    plt.show()
-    
-# 3. Visualizza feature maps per ogni strato
-    for layer_name, layer_activation in zip(layer_names, activations):
-        n_filters = layer_activation.shape[-1]
-        cols = 16
-        rows = math.ceil(n_filters / cols)
-
-        fig, axes = plt.subplots(rows, cols, figsize=(cols * 1.5, rows * 1.5), squeeze=False)
-        axes_flat = axes.flatten()
-        fig.suptitle(f'Layer: {layer_name}  ({n_filters} filters)', fontsize=12)
-
-        for i in range(n_filters):
-            axes_flat[i].imshow(layer_activation[0, :, :, i], cmap='viridis')
-            axes_flat[i].axis('off')
-
-        for i in range(n_filters, len(axes_flat)):
-            axes_flat[i].axis('off')
-
-        plt.tight_layout()
-        plt.show()
-
-# --------------------------------------------------------------------------------------------------------------
-
-def build_light_model(use_he=False, use_l2=False, optimizer='adam'):
-    """
-    Lightweight version of build_optimized_model with half the filters/units per layer.
-    Data Augmentation is handled EXTERNALLY via ImageDataGenerator.
-    """
-    INPUT_SHAPE = (56, 56, 1)
-    NUM_CLASSES = 9
-
-    model = Sequential(name="Light_CNN")
-
-    # --- He Initialization ---
-    if use_he:
-        print("-> Applying He Initialization")
-        initializer = 'he_normal'
-    else:
-        initializer = 'glorot_uniform'
-
-    # --- L2 Regularization ---
-    if use_l2:
-        print("-> Applying L2 Regularization")
-        regularizer = l2(0.001)
-    else:
-        regularizer = None
-
-    # --- Block 1: Feature Extraction ---
-    model.add(Conv2D(16, kernel_size=(3, 3), activation='relu', padding='same',   # era 32
-                     kernel_initializer=initializer, kernel_regularizer=regularizer,
-                     input_shape=INPUT_SHAPE, name="conv_layer_1"))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-
-    model.add(Conv2D(32, kernel_size=(3, 3), activation='relu', padding='same',   # era 64
-                     kernel_initializer=initializer, kernel_regularizer=regularizer, name="conv_layer_2"))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-
-    model.add(Conv2D(64, kernel_size=(3, 3), activation='relu', padding='same',   # era 128
-                     kernel_initializer=initializer, kernel_regularizer=regularizer, name="conv_layer_3"))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-
-    # --- Block 2: Classification ---
-    model.add(Flatten())
-
-    model.add(Dense(64, activation='relu',                                         # era 128
-                    kernel_initializer=initializer, kernel_regularizer=regularizer))
-    model.add(Dropout(0.5))
-
-    model.add(Dense(NUM_CLASSES, activation='softmax'))
-
-    # --- Optimizer ---
-    if isinstance(optimizer, str):
-        opt = SGD(learning_rate=0.01, momentum=0.9) if optimizer == 'sgd_momentum' \
-          else Adam(learning_rate=0.001)
-    else:
-        opt = optimizer
-
-    model.compile(optimizer=opt, loss='categorical_crossentropy', metrics=['accuracy'])
-    return model
-
-# --------------------------------------------------------------------------------------------------------------
-
-def build_ultra_light_model(use_he=False, use_l2=False, optimizer='adam'):
-    """
-    Versione Ultra-Light: Filtri ridotti (8-16-32) e Global Average Pooling.
-    Risparmio di oltre il 90% dei parametri rispetto al modello con Flatten().
-    """
-    INPUT_SHAPE = (56, 56, 1)
-    NUM_CLASSES = 9
-
-    model = Sequential(name="Ultra_Light_CNN")
-
-    # --- Inizializzazione ---
-    if use_he:
-        print("-> Applying He Initialization")
-        initializer = 'he_normal'
-    else:
-        initializer = 'glorot_uniform'
-
-    # --- Regolarizzazione ---
-    if use_l2:
-        print("-> Applying L2 Regularization")
-        regularizer = l2(0.001)
-    else:
-        regularizer = None
-
-    # --- Block 1: Feature Extraction ---
-    # Ridotto da 16 a 8 filtri
-    model.add(Conv2D(8, kernel_size=(3, 3), activation='relu', padding='same',
-                     kernel_initializer=initializer, kernel_regularizer=regularizer,
-                     input_shape=INPUT_SHAPE, name="conv_layer_1"))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-
-    # Ridotto da 32 a 16 filtri
-    model.add(Conv2D(16, kernel_size=(3, 3), activation='relu', padding='same',
-                     kernel_initializer=initializer, kernel_regularizer=regularizer, name="conv_layer_2"))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-
-    # Ridotto da 64 a 32 filtri
-    model.add(Conv2D(32, kernel_size=(3, 3), activation='relu', padding='same',
-                     kernel_initializer=initializer, kernel_regularizer=regularizer, name="conv_layer_3"))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-
-    # --- Block 2: Classification (LA VERA RIVOLUZIONE) ---
-    # Invece di appiattire (Flatten) e creare centinaia di migliaia di connessioni,
-    # facciamo semplicemente la media spaziale di ogni singola feature map.
-    model.add(GlobalAveragePooling2D(name="gap_layer"))
-    
-    # Opzionale: un po' di dropout per sicurezza, anche se il GAP è già un forte regolarizzatore
-    model.add(Dropout(0.3)) 
-
-    # Connettiamo direttamente i 32 valori medi alle 9 classi di output
-    model.add(Dense(NUM_CLASSES, activation='softmax', name="output_layer"))
-
-    # --- Optimizer ---
-    if isinstance(optimizer, str):
-        opt = SGD(learning_rate=0.01, momentum=0.9) if optimizer == 'sgd_momentum' \
-          else Adam(learning_rate=0.001)
-    else:
-        opt = optimizer
-
-    model.compile(optimizer=opt, loss='categorical_crossentropy', metrics=['accuracy'])
-    
-    return model
-
-# --------------------------------------------------------------------------------------------------------------
-
-def statistical_analysis(df):
-    print("--- General Information ---")
-    print(f"Dataset shape: {df.shape}")
-    print(f"Null values per column:\n{df.isnull().sum()}\n")
-    
-    print("--- Class Distribution (failureType) ---")
-    distribution = df['failureType'].value_counts()
-    print(distribution)
-
-    # Bar chart for defect distribution with percentages
-    plt.figure(figsize=(10, 5))
-    ax = sns.barplot(
-        y=distribution.index, 
-        x=distribution.values, 
-        color='steelblue'
-    )
-    
-    # Calculate and add percentage labels
-    total = distribution.sum()
-    percentages = [f" {(value / total) * 100:.1f}%" for value in distribution.values]
-    ax.bar_label(ax.containers[0], labels=percentages, label_type='edge', padding=3)
-
-    plt.title("Failure Type Distribution")
-    plt.xlabel("Count")
-    plt.ylabel("Defect Type")
-    
-    # Expand x-axis limit slightly to make room for the percentage text
-    plt.xlim(0, max(distribution.values) * 1.15) 
-    
-    plt.tight_layout()
-    plt.show()
-
-    # Histogram for die size distribution (if available)
-    if 'dieSize' in df.columns:
-        plt.figure(figsize=(10, 5))
-        sns.histplot(df['dieSize'], bins=50, kde=True, color='teal')
-        plt.title("Die Size Distribution")
-        plt.xlabel("Size")
-        plt.ylabel("Frequency")
-        plt.tight_layout()
-        plt.show()
-        
-# --------------------------------------------------------------------------------------------------------------
-
-def visualize_wafer_samples(df):
-    classes = df['failureType'].unique()
-    n_classes = len(classes)
-    
-    cols = 3
-    rows = int(np.ceil(n_classes / cols))
-    
-    fig, axes = plt.subplots(rows, cols, figsize=(12, 3 * rows))
-    axes = axes.ravel()
-    
-    for i, cls in enumerate(classes):
-        # Extract the first available wafer map for the current class
-        sample = df[df['failureType'] == cls].iloc[0]
-        
-        axes[i].imshow(sample['waferMap'], cmap='inferno')
-        axes[i].set_title(f"{cls}")
-        axes[i].axis('off')
-        
-    # Hide excess empty axes
-    for j in range(i + 1, len(axes)):
-        axes[j].axis('off')
-        
-    plt.tight_layout()
-    plt.show()
-
-# --------------------------------------------------------------------------------------------------------------
 
 def is_valid_label(label):
     # Handle nested lists or numpy arrays
@@ -440,3 +51,639 @@ def is_valid_label(label):
     
     # Return True only if it's explicitly training or test
     return label_str in ['training', 'test']
+
+
+def set_global_determinism(seed: int = 42, clear_session: bool = False) -> None:
+    """Reset Python, NumPy, and TensorFlow random state for a new experiment."""
+    if clear_session:
+        tf.keras.backend.clear_session()
+
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    os.environ["TF_DETERMINISTIC_OPS"] = "1"
+
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.keras.utils.set_random_seed(seed)
+
+    try:
+        tf.config.experimental.enable_op_determinism()
+    except (AttributeError, RuntimeError):
+        pass
+
+
+def clean_nested_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Flatten nested label values and standardize their text representation."""
+    cleaned = df.copy()
+
+    if "trianTestLabel" in cleaned.columns:
+        cleaned = cleaned.rename(columns={"trianTestLabel": "trainTestLabel"})
+
+    def extract_text(value: Any) -> str:
+        while isinstance(value, (np.ndarray, list)):
+            if len(value) == 0:
+                return "unknown"
+            value = value[0]
+        return str(value).strip().lower()
+
+    for column in ("trainTestLabel", "failureType"):
+        if column in cleaned.columns:
+            cleaned[column] = cleaned[column].map(extract_text)
+
+    return cleaned
+
+
+def cap_indices_per_class(
+    indices: np.ndarray,
+    labels: np.ndarray,
+    max_samples_per_class: int = 3000,
+    seed: int = 42,
+) -> np.ndarray:
+    """Cap only the supplied index set while preserving every minority example."""
+    indices = np.asarray(indices, dtype=np.int64)
+    labels = np.asarray(labels)
+    rng = np.random.default_rng(seed)
+    selected: list[np.ndarray] = []
+
+    for class_value in np.unique(labels[indices]):
+        class_indices = indices[labels[indices] == class_value]
+        if len(class_indices) > max_samples_per_class:
+            class_indices = rng.choice(
+                class_indices,
+                size=max_samples_per_class,
+                replace=False,
+            )
+        selected.append(np.asarray(class_indices, dtype=np.int64))
+
+    capped = np.concatenate(selected)
+    rng.shuffle(capped)
+    return capped
+
+
+def resize_wafer_maps(
+    df: pd.DataFrame,
+    target_shape: tuple[int, int] = (56, 56),
+    column: str = "waferMap",
+) -> np.ndarray:
+    """Resize discrete wafer maps with nearest-neighbor interpolation."""
+    if column not in df.columns:
+        raise KeyError(f"Missing required column: {column}")
+
+    resized_maps = []
+    print(f"Resizing {len(df):,} wafer maps to {target_shape}...")
+
+    for image in tqdm(df[column].to_numpy(), total=len(df)):
+        resized = resize(
+            image,
+            target_shape,
+            order=0,
+            preserve_range=True,
+            anti_aliasing=False,
+        )
+        resized_maps.append(resized.astype(np.uint8))
+
+    return np.expand_dims(np.asarray(resized_maps, dtype=np.uint8), axis=-1)
+
+
+def _resolve_optimizer(optimizer: str | tf.keras.optimizers.Optimizer):
+    if not isinstance(optimizer, str):
+        return optimizer
+
+    optimizer_name = optimizer.strip().lower()
+    registry = {
+        "adam": lambda: Adam(learning_rate=0.001),
+        "nadam": lambda: Nadam(learning_rate=0.001),
+        "rmsprop": lambda: RMSprop(learning_rate=0.001),
+        "sgd_momentum": lambda: SGD(
+            learning_rate=0.01,
+            momentum=0.9,
+            nesterov=False,
+        ),
+        "sgd_nesterov": lambda: SGD(
+            learning_rate=0.01,
+            momentum=0.9,
+            nesterov=True,
+        ),
+    }
+
+    if optimizer_name not in registry:
+        available = ", ".join(sorted(registry))
+        raise ValueError(
+            f"Unsupported optimizer '{optimizer}'. Available values: {available}"
+        )
+
+    return registry[optimizer_name]()
+
+
+def build_optimized_model(
+    use_he: bool = False,
+    use_l2: bool = False,
+    optimizer: str | tf.keras.optimizers.Optimizer = "adam",
+    input_shape: tuple[int, int, int] = (56, 56, 1),
+    num_classes: int = 9,
+    l2_strength: float = 0.001,
+) -> tf.keras.Model:
+    """Build the CNN used throughout the controlled experiments."""
+    initializer = "he_normal" if use_he else "glorot_uniform"
+    regularizer = l2(l2_strength) if use_l2 else None
+
+    model = Sequential(
+        [
+            Input(shape=input_shape, name="wafer_map"),
+            Rescaling(scale=0.5, name="normalize_discrete_values"),
+            Conv2D(
+                32,
+                kernel_size=(3, 3),
+                activation="relu",
+                padding="same",
+                kernel_initializer=initializer,
+                kernel_regularizer=regularizer,
+                name="conv_layer_1",
+            ),
+            BatchNormalization(name="batch_norm_1"),
+            MaxPooling2D(pool_size=(2, 2), name="max_pool_1"),
+            Conv2D(
+                64,
+                kernel_size=(3, 3),
+                activation="relu",
+                padding="same",
+                kernel_initializer=initializer,
+                kernel_regularizer=regularizer,
+                name="conv_layer_2",
+            ),
+            BatchNormalization(name="batch_norm_2"),
+            MaxPooling2D(pool_size=(2, 2), name="max_pool_2"),
+            Conv2D(
+                128,
+                kernel_size=(3, 3),
+                activation="relu",
+                padding="same",
+                kernel_initializer=initializer,
+                kernel_regularizer=regularizer,
+                name="conv_layer_3",
+            ),
+            BatchNormalization(name="batch_norm_3"),
+            MaxPooling2D(pool_size=(2, 2), name="max_pool_3"),
+            Flatten(name="flatten"),
+            Dense(
+                128,
+                activation="relu",
+                kernel_initializer=initializer,
+                kernel_regularizer=regularizer,
+                name="dense_features",
+            ),
+            Dropout(0.5, name="dropout"),
+            Dense(num_classes, activation="softmax", name="class_probabilities"),
+        ],
+        name="Wafer_CNN",
+    )
+
+    model.compile(
+        optimizer=_resolve_optimizer(optimizer),
+        loss="categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+    return model
+
+
+def make_callbacks(
+    checkpoint_path: str | Path,
+    patience: int = 5,
+    reduce_lr_patience: int = 3,
+) -> list[tf.keras.callbacks.Callback]:
+    """Create callbacks that agree on the same validation objective."""
+    checkpoint_path = Path(checkpoint_path)
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+    return [
+        EarlyStopping(
+            monitor="val_loss",
+            mode="min",
+            patience=patience,
+            restore_best_weights=True,
+            verbose=1,
+        ),
+        ReduceLROnPlateau(
+            monitor="val_loss",
+            mode="min",
+            factor=0.5,
+            patience=reduce_lr_patience,
+            min_lr=1e-6,
+            verbose=1,
+        ),
+        ModelCheckpoint(
+            filepath=str(checkpoint_path),
+            monitor="val_loss",
+            mode="min",
+            save_best_only=True,
+            save_weights_only=True,
+            verbose=1,
+        ),
+    ]
+
+
+def evaluate_classifier(
+    model: tf.keras.Model,
+    features: np.ndarray,
+    labels: np.ndarray,
+    class_names: np.ndarray | list[str],
+    batch_size: int = 256,
+):
+    """Return aggregate metrics, a class report, a confusion matrix, and predictions."""
+    labels = np.asarray(labels, dtype=np.int64)
+    class_names = np.asarray(class_names)
+    class_ids = np.arange(len(class_names))
+
+    probabilities = model.predict(features, batch_size=batch_size, verbose=0)
+    predictions = np.argmax(probabilities, axis=1)
+
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        labels,
+        predictions,
+        labels=class_ids,
+        average="macro",
+        zero_division=0,
+    )
+
+    metrics = {
+        "Accuracy": accuracy_score(labels, predictions),
+        "Balanced Accuracy": balanced_accuracy_score(labels, predictions),
+        "Macro Precision": precision,
+        "Macro Recall": recall,
+        "Macro F1": f1,
+    }
+
+    report = pd.DataFrame(
+        classification_report(
+            labels,
+            predictions,
+            labels=class_ids,
+            target_names=class_names,
+            output_dict=True,
+            zero_division=0,
+        )
+    ).transpose()
+
+    matrix = confusion_matrix(labels, predictions, labels=class_ids)
+    return metrics, report, matrix, predictions
+
+
+def plot_training_history(history_obj, experiment_name: str = "") -> None:
+    """Plot training and validation accuracy and loss."""
+    _, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    axes[0].plot(history_obj.history["accuracy"], label="Training accuracy")
+    axes[0].plot(history_obj.history["val_accuracy"], label="Validation accuracy")
+    axes[0].set_title(f"Accuracy — {experiment_name}")
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("Accuracy")
+    axes[0].legend()
+    axes[0].grid(True, linestyle="--", alpha=0.5)
+
+    axes[1].plot(history_obj.history["loss"], label="Training loss")
+    axes[1].plot(history_obj.history["val_loss"], label="Validation loss")
+    axes[1].set_title(f"Loss — {experiment_name}")
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("Loss")
+    axes[1].legend()
+    axes[1].grid(True, linestyle="--", alpha=0.5)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_confusion_matrix(
+    matrix: np.ndarray,
+    class_names: np.ndarray | list[str],
+    title: str,
+    normalize: bool = True,
+) -> None:
+    """Plot a raw or row-normalized confusion matrix."""
+    matrix_to_plot = matrix.astype(np.float64)
+
+    if normalize:
+        row_totals = matrix_to_plot.sum(axis=1, keepdims=True)
+        matrix_to_plot = np.divide(
+            matrix_to_plot,
+            row_totals,
+            out=np.zeros_like(matrix_to_plot),
+            where=row_totals != 0,
+        )
+
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(
+        matrix_to_plot,
+        annot=True,
+        fmt=".2f" if normalize else "d",
+        cmap="Blues",
+        xticklabels=class_names,
+        yticklabels=class_names,
+    )
+    plt.title(title)
+    plt.xlabel("Predicted class")
+    plt.ylabel("True class")
+    plt.tight_layout()
+    plt.show()
+
+
+def visualize_wafer_samples(
+    df: pd.DataFrame,
+    class_column: str = "failureType",
+    image_column: str = "waferMap",
+) -> None:
+    """Show one original wafer map for each class."""
+    classes = sorted(df[class_column].unique())
+    columns = 3
+    rows = math.ceil(len(classes) / columns)
+
+    figure, axes = plt.subplots(rows, columns, figsize=(12, 3 * rows))
+    axes = np.asarray(axes).reshape(-1)
+
+    for axis, class_name in zip(axes, classes):
+        sample = df.loc[df[class_column] == class_name, image_column].iloc[0]
+        axis.imshow(sample, cmap="inferno")
+        axis.set_title(class_name)
+        axis.axis("off")
+
+    for axis in axes[len(classes):]:
+        axis.axis("off")
+
+    figure.tight_layout()
+    plt.show()
+
+
+def visualize_original_and_maps(
+    model: tf.keras.Model,
+    input_image: np.ndarray,
+    label_index: int,
+    class_names: np.ndarray | list[str],
+) -> None:
+    """Display an input wafer map and the feature maps of every convolutional layer."""
+    convolutional_layers = [
+        layer for layer in model.layers if isinstance(layer, tf.keras.layers.Conv2D)
+    ]
+    activation_model = tf.keras.Model(
+        inputs=model.input,
+        outputs=[layer.output for layer in convolutional_layers],
+    )
+    activations = activation_model.predict(input_image[np.newaxis, ...], verbose=0)
+
+    plt.figure(figsize=(2.5, 2.5))
+    plt.imshow(np.squeeze(input_image), cmap="gray")
+    plt.title(f"Original\nClass: {class_names[label_index]}")
+    plt.axis("off")
+    plt.show()
+
+    for layer, activation in zip(convolutional_layers, activations):
+        filter_count = activation.shape[-1]
+        columns = 8
+        rows = math.ceil(filter_count / columns)
+        figure, axes = plt.subplots(
+            rows,
+            columns,
+            figsize=(columns * 1.3, rows * 1.3),
+            squeeze=False,
+        )
+        flat_axes = axes.ravel()
+        figure.suptitle(f"{layer.name} — {filter_count} feature maps")
+
+        for filter_index in range(filter_count):
+            flat_axes[filter_index].imshow(
+                activation[0, :, :, filter_index],
+                cmap="viridis",
+            )
+            flat_axes[filter_index].axis("off")
+
+        for axis in flat_axes[filter_count:]:
+            axis.axis("off")
+
+        plt.tight_layout()
+        plt.show()
+
+
+def add_bar_labels(axis, bars, suffix: str = "%") -> None:
+    """Add compact labels above a collection of bars."""
+    for bar in bars:
+        height = bar.get_height()
+        axis.text(
+            bar.get_x() + bar.get_width() / 2,
+            height,
+            f"{height:.1f}{suffix}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+
+class ValidationMacroF1Checkpoint(tf.keras.callbacks.Callback):
+    def __init__(
+        self,
+        x_validation,
+        y_validation,
+        checkpoint_path,
+        batch_size=256,
+        patience=8,
+        min_delta=0.001,
+    ):
+        super().__init__()
+
+        self.x_validation = x_validation
+        self.y_validation = np.asarray(y_validation)
+        self.checkpoint_path = str(checkpoint_path)
+        self.batch_size = batch_size
+        self.patience = patience
+        self.min_delta = min_delta
+
+        self.best_macro_f1 = -np.inf
+        self.best_epoch = 0
+        self.wait = 0
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs if logs is not None else {}
+
+        probabilities = self.model.predict(
+            self.x_validation,
+            batch_size=self.batch_size,
+            verbose=0,
+        )
+        predictions = np.argmax(probabilities, axis=1)
+
+        macro_f1 = f1_score(
+            self.y_validation,
+            predictions,
+            average="macro",
+            zero_division=0,
+        )
+        balanced_accuracy = balanced_accuracy_score(
+            self.y_validation,
+            predictions,
+        )
+
+        logs["val_macro_f1"] = macro_f1
+        logs["val_balanced_accuracy"] = balanced_accuracy
+
+        print(
+            f" — val_macro_f1: {macro_f1:.4f}"
+            f" — val_balanced_accuracy: {balanced_accuracy:.4f}"
+        )
+
+        if macro_f1 > self.best_macro_f1 + self.min_delta:
+            self.best_macro_f1 = macro_f1
+            self.best_epoch = epoch + 1
+            self.wait = 0
+            self.model.save_weights(self.checkpoint_path)
+
+            print(
+                f"Saved new best Macro F1 checkpoint "
+                f"at epoch {self.best_epoch}."
+            )
+        else:
+            self.wait += 1
+
+            if self.wait >= self.patience:
+                print(
+                    "Early stopping based on validation Macro F1. "
+                    f"Best epoch: {self.best_epoch}."
+                )
+                self.model.stop_training = True
+
+
+def make_macro_f1_callbacks(
+    x_validation,
+    y_validation,
+    checkpoint_path,
+    batch_size=256,
+    patience=8,
+    min_delta=0.001,
+):
+    return [
+        ValidationMacroF1Checkpoint(
+            x_validation=x_validation,
+            y_validation=y_validation,
+            checkpoint_path=checkpoint_path,
+            batch_size=batch_size,
+            patience=patience,
+            min_delta=min_delta,
+        ),
+        ReduceLROnPlateau(
+            monitor="val_loss",
+            mode="min",
+            factor=0.5,
+            patience=3,
+            min_lr=1e-6,
+            verbose=1,
+        ),
+    ]
+
+def build_intermediate_model(
+    use_he=False,
+    use_l2=False,
+    optimizer="adam",
+    input_shape=(56, 56, 1),
+    num_classes=9,
+    l2_strength=0.001,
+):
+    """
+    Build the intermediate-width wafer-map CNN.
+
+    Architecture:
+        Conv2D: 24 -> 48 -> 96 filters
+        Dense: 96 units
+
+    The model keeps the same preprocessing, pooling, normalization,
+    regularization, dropout, and classifier design as the full CNN.
+    """
+    initializer = "he_normal" if use_he else "glorot_uniform"
+    regularizer = (
+        tf.keras.regularizers.l2(l2_strength)
+        if use_l2
+        else None
+    )
+
+    model = tf.keras.Sequential(
+        [
+            tf.keras.layers.Input(
+                shape=input_shape,
+                name="wafer_map",
+            ),
+            tf.keras.layers.Rescaling(
+                scale=0.5,
+                name="normalize_discrete_values",
+            ),
+            tf.keras.layers.Conv2D(
+                24,
+                kernel_size=(3, 3),
+                activation="relu",
+                padding="same",
+                kernel_initializer=initializer,
+                kernel_regularizer=regularizer,
+                name="conv_layer_1",
+            ),
+            tf.keras.layers.BatchNormalization(
+                name="batch_norm_1"
+            ),
+            tf.keras.layers.MaxPooling2D(
+                pool_size=(2, 2),
+                name="max_pool_1",
+            ),
+            tf.keras.layers.Conv2D(
+                48,
+                kernel_size=(3, 3),
+                activation="relu",
+                padding="same",
+                kernel_initializer=initializer,
+                kernel_regularizer=regularizer,
+                name="conv_layer_2",
+            ),
+            tf.keras.layers.BatchNormalization(
+                name="batch_norm_2"
+            ),
+            tf.keras.layers.MaxPooling2D(
+                pool_size=(2, 2),
+                name="max_pool_2",
+            ),
+            tf.keras.layers.Conv2D(
+                96,
+                kernel_size=(3, 3),
+                activation="relu",
+                padding="same",
+                kernel_initializer=initializer,
+                kernel_regularizer=regularizer,
+                name="conv_layer_3",
+            ),
+            tf.keras.layers.BatchNormalization(
+                name="batch_norm_3"
+            ),
+            tf.keras.layers.MaxPooling2D(
+                pool_size=(2, 2),
+                name="max_pool_3",
+            ),
+            tf.keras.layers.Flatten(
+                name="flatten"
+            ),
+            tf.keras.layers.Dense(
+                96,
+                activation="relu",
+                kernel_initializer=initializer,
+                kernel_regularizer=regularizer,
+                name="dense_features",
+            ),
+            tf.keras.layers.Dropout(
+                0.5,
+                name="dropout",
+            ),
+            tf.keras.layers.Dense(
+                num_classes,
+                activation="softmax",
+                name="class_probabilities",
+            ),
+        ],
+        name="Intermediate_Wafer_CNN",
+    )
+
+    model.compile(
+        optimizer=_resolve_optimizer(optimizer),
+        loss="categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+
+    return model
